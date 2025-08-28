@@ -1,101 +1,30 @@
 import supabase from "../config/supabase.js";
 import logger from "../utils/logger.js";
-import { DEFAULT_ROLES } from "../config/roles.js";
-import { checkUserExists } from "../services/userService.js";
-import { getRoleIdByName } from "../services/roleService.js";
+import { createUser } from "../services/userService.js";
+// import { getRoleIdByName } from "../services/roleService.js";
 
 export const signup = async (req, res, next) => {
   try {
-    const { email, password, first_name, last_name, phone, company_name } =
-      req.body;
+    const { email, password, company_name } = req.body;
 
+    // Basic validations
     if (!email || !password || !company_name) {
       return res
         .status(400)
         .json({ error: "Email, password, and company name are required" });
     }
 
-    // 🔹 Check if user already exists
-    const exists = await checkUserExists(email);
-    if (exists) {
-      return res.status(400).json({ error: "Email already registered" });
-    }
+    // 🔹 Delegate all business logic to service
+    const result = await createUser(req.body);
 
-    // 🔹 Create Auth user
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    if (authError) {
-      logger.error(`Signup failed for ${email}: ${authError.message}`);
-      return res.status(400).json({ error: authError.message });
-    }
-    const user = authData.user;
-
-    // 🔹 Create Tenant
-    const slug = company_name.toLowerCase().replace(/\s+/g, "-");
-    const { data: tenant, error: tenantError } = await supabase
-      .from("tenants")
-      .insert({
-        name: company_name,
-        slug,
-        created_at: new Date(),
-        updated_at: new Date(),
-      })
-      .select("id")
-      .single();
-
-    if (tenantError) {
-      await supabase.auth.admin.deleteUser(user.id);
-      return res
-        .status(500)
-        .json({ error: "Signup rolled back due to tenant creation failure" });
-    }
-
-    // 🔹 Create Profile
-    const { error: profileError } = await supabase.from("profiles").insert({
-      id: user.id,
-      tenant_id: tenant.id,
-      first_name,
-      last_name,
-      primary_phone_e164: phone,
-      status: "active",
-      created_at: new Date(),
-      updated_at: new Date(),
-    });
-
-    if (profileError) {
-      await supabase.from("tenants").delete().eq("id", tenant.id);
-      await supabase.auth.admin.deleteUser(user.id);
-      return res
-        .status(500)
-        .json({ error: "Signup rolled back due to profile creation failure" });
-    }
-
-    // 🔹 Get Role ID from config
-    const adminRoleId = await getRoleIdByName(DEFAULT_ROLES.TENANT_ADMIN);
-
-    // 🔹 Assign role
-    const { error: assignRoleError } = await supabase
-      .from("profile_roles")
-      .insert({ profile_id: user.id, role_id: adminRoleId });
-
-    if (assignRoleError) {
-      await supabase.from("profiles").delete().eq("id", user.id);
-      await supabase.from("tenants").delete().eq("id", tenant.id);
-      await supabase.auth.admin.deleteUser(user.id);
-      return res
-        .status(500)
-        .json({ error: "Signup rolled back due to role assignment failure" });
-    }
-
+    // Service returns: { user, tenant, roles, tokens }
     res.status(201).json({
       message: "Signup successful",
-      tenant_id: tenant.id,
-      user,
-      roles: [DEFAULT_ROLES.TENANT_ADMIN],
-      access_token: authData.session ? authData.session.access_token : null,
-      refresh_token: authData.session ? authData.session.refresh_token : null,
+      tenant_id: result.tenant.id,
+      user: result.user,
+      roles: result.roles,
+      access_token: result.tokens?.access_token || null,
+      refresh_token: result.tokens?.refresh_token || null,
     });
   } catch (err) {
     next(err);

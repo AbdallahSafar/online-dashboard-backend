@@ -30,3 +30,4 @@ coverage/
 
 # Optional: if you use Docker later
 docker-compose.override.yml
+src/test.js
